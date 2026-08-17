@@ -1,0 +1,65 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: authentik
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://charts.goauthentik.io
+    chart: authentik
+    targetRevision: "2026.5.6" # confirmed current as of writing - re-check
+    # at https://github.com/goauthentik/helm/releases before relying on this
+    helm:
+      releaseName: authentik
+      values: |
+        postgresql:
+          enabled: true
+          auth:
+            existingSecret: authentik-creds
+            secretKeys:
+              adminPasswordKey: postgresql-password
+              userPasswordKey: postgresql-password
+        redis:
+          enabled: true
+        server:
+          env:
+            - name: AUTHENTIK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-creds
+                  key: secret_key
+            - name: AUTHENTIK_POSTGRESQL__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-creds
+                  key: postgresql-password
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            hosts:
+              - auth.codeomelet.dev
+            # intentionally NO forward-auth middleware annotation here -
+            # Authentik must never require itself as a login gate, or you
+            # get a redirect loop nobody can log in out of.
+        worker:
+          env:
+            - name: AUTHENTIK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-creds
+                  key: secret_key
+            - name: AUTHENTIK_POSTGRESQL__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-creds
+                  key: postgresql-password
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: authentik
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

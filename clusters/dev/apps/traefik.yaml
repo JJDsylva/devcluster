@@ -1,0 +1,41 @@
+# ingress-nginx (kubernetes/ingress-nginx) was retired in March 2026 - no more
+# releases, bugfixes, or security patches. Using Traefik instead: actively
+# maintained, and Authentik's forward-auth integration is officially
+# documented for it (docs.goauthentik.io/add-secure-apps/providers/proxy/server_traefik/).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: traefik
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://traefik.github.io/charts
+    chart: traefik
+    # confirm current version with:
+    #   helm repo add traefik https://traefik.github.io/charts
+    #   helm search repo traefik/traefik --versions | head
+    targetRevision: "REPLACE_WITH_CURRENT_VERSION"
+    helm:
+      releaseName: traefik
+      values: |
+        # ClusterIP only - nothing needs a public LoadBalancer/NodePort,
+        # cloudflared reaches this over the cluster network only.
+        service:
+          type: ClusterIP
+        ports:
+          web:
+            port: 8000
+          websecure:
+            port: 8443
+        # Middleware/IngressRoute CRDs on by default in recent chart versions -
+        # verify with: kubectl get crd | grep traefik.io
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: traefik
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

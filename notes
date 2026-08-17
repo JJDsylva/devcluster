@@ -1,0 +1,41 @@
+
+Diagnosed permission deficiency and prescribed elevated API token privileges
+
+This one's on the Proxmox permissions side, not Terraform — good sign that it's now actually talking to the API.
+
+The query-url-metadata/download-url endpoints Proxmox uses to fetch a file by URL require Sys.Audit and Sys.Modify privileges at the node/root path — separate from whatever VM/storage permissions your terraform-prov@pam token already has for creating VMs. That's a well-known gap: minimal tokens set up just for VM management usually don't have it, so the API call gets rejected with 403 even though the token works fine for everything else.
+
+Fix in the Proxmox UI:
+
+    Datacenter → Permissions → Add → User Permission
+    Path: /
+    User: terraform-prov@pam (the token's parent user, not the token itself)
+    Role: either PVEAdmin (simplest, broad), or if you want to stay minimal, create/use a custom role that includes Sys.Audit, Sys.Modify, Datastore.AllocateSpace, Datastore.Audit
+    Save, then rerun terraform apply
+
+If you'd rather do it via CLI on the Proxmox host instead of the UI:
+bash
+
+pveum acl modify / --users terraform-prov@pam --roles PVEAdmin
+
+Once that permission's in place this should get past the download and move on to actually creating the VMs — that's the real long pole in this apply.
+
+That's the likely culprit — API tokens in Proxmox default to "Privilege Separation" enabled, meaning the token (terraform-prov@pam!automation) does not automatically inherit the permissions you just granted the user (terraform-prov@pam). It's treated as a separate identity in the ACL system. So the token creating your other VMs is likely still running on whatever narrower role it had before.
+
+Two ways to fix it:
+
+Option A — grant the permission to the token itself (keeps privilege separation, more explicit):
+bash
+
+pveum acl modify / --tokens 'terraform-prov@pam!automation' --roles PVEAdmin
+
+Note the --tokens flag (not --users) and the token is referenced as user@realm!tokenid.
+
+Option B — disable privilege separation on the token so it just inherits whatever the user has (simpler, less isolated):
+
+    Datacenter → Permissions → API Tokens → find terraform-prov@pam!automation → uncheck "Privilege Separation" → Save.
+
+Either works; Option A is the more correct long-term habit since it keeps the token scoped independently of the user account. Rerun terraform apply after either change.
+
+terraform output -raw kubeconfig > kubeconfig
+export KUBECONFIG=$PWD/kubeconfig

@@ -1,0 +1,17 @@
+# Replace TUNNEL_ID_HERE with the ID printed by `cloudflared tunnel create`.
+# Verify the traefik service name/namespace with: kubectl get svc -n traefik
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: cloudflared
+data:
+  config.yaml: |
+    tunnel: TUNNEL_ID_HERE
+    credentials-file: /etc/cloudflared/creds/credentials.json
+    ingress:
+      - hostname: argocd.codeomelet.dev
+        service: http://traefik.traefik.svc.cluster.local:8000
+      - hostname: auth.codeomelet.dev
+        service: http://traefik.traefik.svc.cluster.local:8000
+      - service: http_status:404

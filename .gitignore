@@ -1,0 +1,28 @@
+# --- Terraform ---
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/*.tfvars
+terraform/crash.log
+terraform/.argocd-root-app-*.yaml
+
+# cluster credentials - never commit these, they grant full access
+terraform/kubeconfig
+terraform/talosconfig
+terraform/.kubeconfig-*
+kubeconfig
+talosconfig
+
+# --- Sealed Secrets workflow ---
+# the SEALED output (*.sealed.yaml) is safe and meant to be committed -
+# only the raw, unsealed material below must never land in git
+sealed-secrets-pub-cert.pem
+*-creds-raw.yaml
+credentials.json
+*.pem
+*.key
+
+# --- editor/OS noise ---
+.DS_Store
+*.swp
