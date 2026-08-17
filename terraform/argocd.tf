@@ -51,7 +51,7 @@ resource "local_file" "argocd_root_app" {
       source = {
         repoURL        = var.github_repo_url
         targetRevision = var.github_repo_branch
-        path           = var.github_repo_path
+        path           = "${var.github_repo_path}/apps"
       }
       destination = {
         server    = "https://kubernetes.default.svc"
