@@ -12,10 +12,9 @@ spec:
   source:
     repoURL: https://traefik.github.io/charts
     chart: traefik
-    # confirm current version with:
-    #   helm repo add traefik https://traefik.github.io/charts
-    #   helm search repo traefik/traefik --versions | head
-    targetRevision: "REPLACE_WITH_CURRENT_VERSION"
+    # confirmed current as of writing (Aug 2026) - re-check at
+    # https://github.com/traefik/traefik-helm-chart/releases before relying
+    targetRevision: "41.2.0"
     helm:
       releaseName: traefik
       values: |
