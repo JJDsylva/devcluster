@@ -7,11 +7,11 @@ metadata:
   namespace: cloudflared
 data:
   config.yaml: |
-    tunnel: TUNNEL_ID_HERE
+    tunnel: 1e1d15b7-779d-4333-99ae-d1ce73edf821
     credentials-file: /etc/cloudflared/creds/credentials.json
     ingress:
       - hostname: argocd.codeomelet.dev
-        service: http://traefik.traefik.svc.cluster.local:8000
+        service: http://traefik.traefik.svc.cluster.local:80
       - hostname: auth.codeomelet.dev
-        service: http://traefik.traefik.svc.cluster.local:8000
+        service: http://traefik.traefik.svc.cluster.local:80
       - service: http_status:404
