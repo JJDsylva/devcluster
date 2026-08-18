@@ -45,6 +45,16 @@ data "talos_machine_configuration" "controlplane" {
               type        = "bind"
               source      = "/var/lib/cilium"
               options     = ["bind", "rshared", "rw"]
+            },
+            {
+              # local-path-provisioner's helper pods hostPath-mount this to
+              # create each PV's directory - without this, Talos's sandboxed
+              # kubelet mount namespace doesn't expose /var/mnt/* to pods,
+              # and the helper pod sits in ContainerCreating forever.
+              destination = "/var/mnt/local-path-provisioner"
+              type        = "bind"
+              source      = "/var/mnt/local-path-provisioner"
+              options     = ["bind", "rshared", "rw"]
             }
           ]
         }
