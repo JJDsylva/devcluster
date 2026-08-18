@@ -27,6 +27,19 @@ spec:
             port: 8000
           websecure:
             port: 8443
+        # cloudflared connects to Traefik over plain HTTP (the "web"
+        # entrypoint), so by default Traefik overwrites X-Forwarded-Proto
+        # with "http" for that hop, even though cloudflared already sent
+        # the correct "https" (reflecting how the browser actually reached
+        # Cloudflare's edge). This makes Authentik think it's being
+        # accessed over plain HTTP and refuse its setup flow. Trusting
+        # this CIDR tells Traefik to pass through what cloudflared sends
+        # instead of overwriting it. 10.244.0.0/16 is this cluster's
+        # observed pod CIDR (confirmed from authentik-server's own logs) -
+        # re-verify with `kubectl get pods -A -o wide` if this ever changes.
+        additionalArguments:
+          - "--entrypoints.web.forwardedheaders.trustedips=10.244.0.0/16"
+          - "--entrypoints.websecure.forwardedheaders.trustedips=10.244.0.0/16"
         # Middleware/IngressRoute CRDs on by default in recent chart versions -
         # verify with: kubectl get crd | grep traefik.io
   destination:
