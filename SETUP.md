@@ -1,33 +1,42 @@
 # codeomelet.dev homelab cluster - project log
 
 Living document, updated as we go. Repo: `github.com/JJDsylva/devcluster`.
-ArgoCD's root app watches `clusters/dev` in this repo (Terraform variable
-`github_repo_path`, left on default) - everything under
-`clusters/dev/` in this repo is what gets deployed.
+Repo layout: `terraform/` (cluster bootstrap, own git history of secrets
+kept out via `.gitignore`) and `clusters/dev/` (GitOps manifests, synced by
+ArgoCD). ArgoCD's root app watches `clusters/dev/apps` specifically (not
+`clusters/dev` itself - see bug #6 below for why that distinction matters).
+
+**Status as of last update: cluster is up, Cloudflare Tunnel is live,
+Authentik/Postgres/Traefik/cloudflared are all Running. Only remaining step
+is the one-time Authentik login + forward-auth provider setup below.**
 
 ---
 
 ## Architecture overview (current)
 
 - **Infra**: 3x Proxmox VM control-plane nodes, Talos Linux v1.13.8
-- **Cluster**: Terraform-managed bootstrap (talos.tf, vm.tf, providers.tf,
-  variables.tf), cluster name `dev`, VIP `10.10.10.50`, nodes
-  `10.10.10.51/.52/.53`
+- **Cluster**: Terraform-managed bootstrap (`terraform/talos.tf`, `vm.tf`,
+  `providers.tf`, `variables.tf`), cluster name `dev`, VIP `10.10.10.50`,
+  nodes `10.10.10.51/.52/.53`
 - **CNI**: Cilium, replaces kube-proxy (`kubeProxyReplacement=true`),
   `ipam.mode=kubernetes`. Talos config patches:
   `cluster.network.cni.name = none`, `cluster.proxy.disabled = true`
-- **GitOps**: ArgoCD deployed via Terraform (`argocd.tf`) as the one
-  Terraform-managed piece; it's the root app-of-apps pointed at
+- **Storage**: `local-path-provisioner` (Rancher), set as default
+  StorageClass, patched for Talos's read-only rootfs (see bug #6)
+- **GitOps**: ArgoCD deployed via Terraform (`terraform/argocd.tf`) as the
+  one Terraform-managed piece; it's the root app-of-apps pointed at
   `https://github.com/JJDsylva/devcluster.git`, branch `main`, path
-  `clusters/dev`. Everything else lives as manifests under
+  `clusters/dev/apps`. Everything else lives as manifests under
   `clusters/dev/` in that repo, synced by ArgoCD - not in Terraform.
 - **Domain**: `codeomelet.dev` (Cloudflare DNS). Per-service subdomains
   under one root.
   - `argocd.codeomelet.dev`
   - `auth.codeomelet.dev`
   - (add more here as apps are added)
-- **Ingress path**: Cloudflare Tunnel -> Traefik (in-cluster, ClusterIP) ->
-  app services. Cilium stays CNI-only.
+- **Ingress path**: Cloudflare Tunnel -> Traefik (in-cluster,
+  `traefik.traefik.svc.cluster.local:80`) -> app services. Cilium stays
+  CNI-only. Tunnel ID `1e1d15b7-779d-4333-99ae-d1ce73edf821`
+  (`k8s-codeomelet`).
 - **Auth**: Authentik gates apps via forward-auth, **domain-level mode**
   (not single-application) - one login persists across every
   `*.codeomelet.dev` subdomain via a cookie scoped to `.codeomelet.dev`,
@@ -39,10 +48,13 @@ ArgoCD's root app watches `clusters/dev` in this repo (Terraform variable
   `configs.params."server\.insecure"` Helm value in `argocd.tf`) - TLS is
   already terminated upstream at Cloudflare + Traefik, so the backend
   serves plain HTTP and Ingress doesn't need backend-TLS annotations.
-- **Secrets**: Sealed Secrets (bitnami-labs/bitnami controller, chart repo
-  moved to `https://bitnami.github.io/sealed-secrets`). Real secret values
-  never touch git - sealed locally with `kubeseal` against the cluster's
-  public cert, only ciphertext committed.
+- **Secrets**: Sealed Secrets (`https://bitnami.github.io/sealed-secrets`
+  chart, `kube-system` namespace). Real secret values never touch git -
+  sealed locally with `kubeseal` against the cluster's public cert, only
+  ciphertext committed. Two secrets sealed so far: tunnel credentials
+  (`clusters/dev/cloudflared/cloudflared-tunnel-credentials.sealed.yaml`)
+  and Authentik's key/DB password
+  (`clusters/dev/ingress/authentik-creds.sealed.yaml`).
 
 ---
 
@@ -59,30 +71,28 @@ ArgoCD's root app watches `clusters/dev` in this repo (Terraform variable
   dashboard-managed tunnel with hostnames configured out-of-band.
 - **Ingress controller: Traefik, not ingress-nginx.** Originally planned
   ingress-nginx (`kubernetes/ingress-nginx`), but that project was
-  **officially retired in March 2026** (announced Nov 2025 at KubeCon NA by
-  the Kubernetes Steering + Security Response Committees) - no more
-  releases, bugfixes, or security patches, ever. Building fresh
-  infrastructure on it today would mean starting on dead, unpatched
-  software. Traefik was picked over Cilium's own Gateway API/Envoy because
-  Authentik's forward-auth integration is officially documented for
-  Traefik (and nginx) but not for Cilium's Envoy - would've meant
-  hand-rolling ext_authz config with no official guide to follow.
-- **Domain-level vs single-application forward auth**: Authentik supports
-  both. Single-application mode needs a separate Provider + Middleware +
-  extra routing rule *per app*, each bound to that app's own external
-  host. Domain-level mode needs exactly one Provider for the whole
-  `codeomelet.dev` domain, and every app just references the same shared
-  Middleware. Since we already committed to one shared root domain with
-  per-service subdomains, domain-level is the natural fit and a lot less
-  repeated setup per app.
+  **officially retired in March 2026** - no more releases, bugfixes, or
+  security patches, ever. Traefik was picked over Cilium's own Gateway
+  API/Envoy because Authentik's forward-auth integration is officially
+  documented for Traefik (and nginx) but not for Cilium's Envoy.
+- **Domain-level vs single-application forward auth**: domain-level needs
+  exactly one Provider for the whole `codeomelet.dev` domain, every app
+  just references the same shared Middleware - a much better fit than
+  single-application mode given the shared-root-domain hostname layout.
 - **`argocd-server` insecure mode**: rather than fight Traefik
-  backend-TLS/ServersTransport config to talk to argocd-server's
-  self-signed cert, argocd-server now just serves plain HTTP directly
-  (standard recommendation when TLS is already terminated upstream).
+  backend-TLS/ServersTransport config, argocd-server just serves plain
+  HTTP directly (standard when TLS is already terminated upstream).
+- **Repo layout**: `terraform/` and `clusters/dev/` split into one
+  monorepo (`devcluster`), not two separate repos - `terraform/` holds
+  state/secrets that are gitignored, `clusters/dev/` is what ArgoCD syncs.
+- **local-path-provisioner over Longhorn/Proxmox CSI**: simplest option
+  for a single-node-class (all 3 nodes are control-plane, schedulable)
+  homelab cluster - no iSCSI/extra host packages needed, works with
+  Talos's writable `/var` once the extraMounts gotcha (bug #6) is handled.
 
 ---
 
-## Bugs hit and fixed (Talos/Terraform bootstrap)
+## Bugs hit and fixed
 
 1. **`rpc error: ... produced zero addresses`** on
    `talos_machine_configuration_apply`. Cause: `node` was fed
@@ -94,154 +104,128 @@ ArgoCD's root app watches `clusters/dev` in this repo (Terraform variable
    hostDNS`**. Cause: `providers.tf` was pinned to `siderolabs/talos`
    `0.12.0-alpha.5`, an alpha whose bundled Talos SDK targets `v1.14.0-
    alpha.1` - schema skew against the actual `v1.13.8` node image. Fix:
-   pinned to stable `0.11.0` (SDK matches `v1.13.x`).
+   pinned to stable `0.11.0`.
 
 3. **`Kubernetes cluster unreachable: dial tcp :6443: connection refused`**
-   on `helm_release.cilium`, right after `talos_machine_bootstrap`. Cause:
-   `talos_cluster_kubeconfig` only proves the Talos API (port 50000) handed
-   back a kubeconfig file - says nothing about whether kube-apiserver on
-   the VIP is actually accepting connections yet (etcd quorum + static pod
-   startup lag). Fix: added `time_sleep.wait_for_api` (60s) between
-   `talos_cluster_kubeconfig` and anything that talks to `:6443`;
-   `helm_release.cilium`'s `depends_on` points at it instead of bootstrap
-   directly.
+   (and later `no route to host` on a full VM rebuild) on
+   `helm_release.cilium`. Cause: the Talos provider's config-apply/
+   bootstrap resources return as soon as the RPC is accepted, not once the
+   node has actually finished rebooting/bootstrapping/electing the VIP -
+   on a cold VM boot that can take minutes. Fix: `time_sleep.wait_for_api`
+   (60s) between `talos_cluster_kubeconfig` and anything hitting `:6443`.
+   Tried replacing this with an active-poll `null_resource` for
+   robustness, but a plain `terraform destroy` + `apply` fixed the actual
+   failure faster than debugging the poll approach - reverted back to
+   `time_sleep`, decided not worth the complexity for now. (Also
+   separately: a copy-paste at some point left `time_sleep.wait_for_api`
+   declared *twice* in `talos.tf`, causing a "Duplicate resource" error -
+   just deleted the redundant block, no functional cause.)
 
 4. **Cilium agent pods `Init:CrashLoopBackOff`**, error `unable to apply
    caps: can't apply capabilities: operation not permitted` on
    `clean-cilium-state`. Cause: Talos permanently blocks `CAP_SYS_MODULE`/
    `CAP_SYS_BOOT` for every process, even privileged ones - Cilium's
-   default Helm chart requests `SYS_MODULE`. Talos also doesn't auto-mount
-   cgroupv2 the way the chart expects. Fix (`cilium.tf`): narrowed
+   default Helm chart requests `SYS_MODULE`. Fix (`cilium.tf`): narrowed
    `securityContext.capabilities.ciliumAgent`/`.cleanCiliumState` to drop
    `SYS_MODULE`, set `cgroup.autoMount.enabled=false`,
-   `cgroup.hostRoot=/sys/fs/cgroup`. Documented, standard Talos+Cilium
-   requirement, not a one-off workaround.
+   `cgroup.hostRoot=/sys/fs/cgroup`.
 
-**Status: all fixed, cluster confirmed healthy** (nodes Ready, Cilium
-running, kube-apiserver/controller-manager/scheduler all up).
+5. **ArgoCD root app `Synced`/`Healthy` but zero child Applications
+   created.** Cause: root's `path` was `clusters/dev`, but all the
+   `Application` manifests live one level deeper in `clusters/dev/apps/` -
+   ArgoCD's directory source only looks at files directly in the given
+   path unless `recurse: true` is set. Fix: pointed root's `path` at
+   `${var.github_repo_path}/apps` specifically instead of adding recurse
+   (recursing would've also tried to directly apply the raw manifests
+   under `cloudflared/`/`ingress/` through root, conflicting with those
+   folders' own wrapper Applications).
+
+6. **`authentik-postgresql-0` stuck `Pending` forever, PVC never bound.**
+   Root cause had two layers:
+   - No default StorageClass existed at all on this bare-metal Talos
+     cluster. Fixed by deploying `local-path-provisioner` (see Kustomize
+     patches in `clusters/dev/storage/`), patched per Talos's own docs to
+     use `/var/mnt/local-path-provisioner` instead of the chart's default
+     `/opt/local-path-provisioner`, since Talos's rootfs is read-only
+     outside `/var`.
+   - Even after that, the provisioner's helper pods sat in
+     `ContainerCreating` forever (`create process timeout after 120
+     seconds`). Same root cause as bug #4's Cilium mount issue: Talos's
+     kubelet runs in its own sandboxed mount namespace, and paths under
+     `/var/mnt/*` aren't exposed into that namespace by default, even
+     though `/var` itself is writable on disk. Fixed with the same
+     `machine.kubelet.extraMounts` pattern used for Cilium's
+     `/var/lib/cilium` mount, this time for
+     `/var/mnt/local-path-provisioner`, in `terraform/talos.tf`.
+
+**Status: all fixed, full stack confirmed healthy** - nodes Ready, Cilium/
+Traefik/cloudflared/sealed-secrets/local-path-provisioner all Running,
+Authentik server+worker+postgres all Running.
 
 ---
 
 ## Cloudflare Tunnel + Authentik rollout
 
-### Manifests written (pushed to `clusters/dev/` in the repo, not yet all applied)
+### What's live right now
 
-- `apps/sealed-secrets.yaml` - Sealed Secrets controller, chart
-  `https://bitnami.github.io/sealed-secrets`, namespace `kube-system`
-- `apps/traefik.yaml` - Traefik, ClusterIP only
-- `apps/cloudflared.yaml` - wraps `cloudflared/` (plain manifests)
-- `cloudflared/configmap.yaml` - tunnel ingress rules, routes every
-  hostname to Traefik; catch-all `http_status:404`
-- `cloudflared/deployment.yaml` - 2 replicas for HA
-- `apps/authentik.yaml` - chart `goauthentik/authentik` pinned to
-  `2026.5.6`, bundled postgresql + redis, secret_key/DB password wired via
-  `existingSecret`/`secretKeyRef` (chart has no clean top-level "use this
-  existing secret" for `secret_key` itself - done via explicit
-  `server.env`/`worker.env` overrides, per goauthentik/authentik#12852,
-  #2591)
-- `apps/ingress.yaml` - wraps `ingress/`
-- `ingress/authentik-forwardauth-middleware.yaml` - the one shared
-  Traefik `Middleware`, domain-level forward auth
-- `ingress/argocd-ingress.yaml` - `argocd.codeomelet.dev`, references the
-  shared middleware, plain HTTP backend
+- Tunnel `k8s-codeomelet` (`1e1d15b7-779d-4333-99ae-d1ce73edf821`) created,
+  DNS CNAMEs routed for `argocd.codeomelet.dev` and `auth.codeomelet.dev`
+- Both sealed secrets committed and applied - `cloudflared` and
+  `authentik` ArgoCD Applications are healthy
+- `local-path-provisioner` deployed and set as default StorageClass
+- All ArgoCD Applications synced: `root`, `sealed-secrets`, `traefik`,
+  `cloudflared`, `authentik`, `ingress`, `local-path-provisioner`
 
-### Still TODO (nothing below is applied yet)
+### Still TODO
 
-- [ ] Confirm/replace `REPLACE_WITH_CURRENT_VERSION` placeholders:
-      - `apps/sealed-secrets.yaml`: `helm search repo
-        sealed-secrets/sealed-secrets --versions | head`
-      - `apps/traefik.yaml`: `helm search repo traefik/traefik --versions
-        | head`
-- [ ] `cloudflared tunnel login` + `cloudflared tunnel create
-      k8s-codeomelet`
-- [ ] `cloudflared tunnel route dns` for `argocd.codeomelet.dev` and
-      `auth.codeomelet.dev`
-- [ ] Fill in `TUNNEL_ID_HERE` in `cloudflared/configmap.yaml`
-- [ ] `git push` this repo (see commands below), let ArgoCD's root app
-      pick up `clusters/dev/apps/*.yaml`
-- [ ] Once `sealed-secrets` syncs: fetch its public cert
-- [ ] Seal + commit `cloudflared/cloudflared-tunnel-credentials.sealed.yaml`
-- [ ] Seal + commit `authentik/authentik-creds.sealed.yaml`
-      (`secret_key` + `postgresql-password`)
-- [ ] Verify `kubectl get svc -n traefik` and `kubectl get svc -n
-      authentik` match the service names/ports hardcoded in
-      `cloudflared/configmap.yaml` and
-      `ingress/authentik-forwardauth-middleware.yaml` - chart defaults can
-      differ by version
-- [ ] Log into `auth.codeomelet.dev` as `akadmin` (bootstrap creds in the
-      chart-generated secret), one-time setup: **Applications > Providers
-      > Create > Proxy Provider > Forward auth (domain level)**, external
-      host `https://auth.codeomelet.dev`, cookie domain `codeomelet.dev` ->
-      bind to an Application -> assign to the embedded outpost
+- [ ] **The one manual step left**: log into `https://auth.codeomelet.dev`
+      as `akadmin` (bootstrap password is in the chart-generated
+      `authentik-bootstrap-password`/`authentik-bootstrap-token` secret in
+      the `authentik` namespace - `kubectl get secret -n authentik` to
+      find the exact name). One-time setup:
+      **Applications > Providers > Create > Proxy Provider > Forward auth
+      (domain level)**, external host `https://auth.codeomelet.dev`,
+      cookie domain `codeomelet.dev` -> bind to an Application -> assign
+      to the embedded outpost.
 - [ ] Verify end-to-end: `https://argocd.codeomelet.dev` should redirect to
       Authentik login, then land back on ArgoCD after auth
-
-### Exact commands
-
-```bash
-# push this repo for the first time
-cd devcluster   # wherever you cloned github.com/JJDsylva/devcluster
-git add clusters/dev
-git commit -m "initial cloudflare tunnel + authentik rollout"
-git push origin main
-
-# 1. tunnel
-cloudflared tunnel login
-cloudflared tunnel create k8s-codeomelet
-
-# 2. DNS
-cloudflared tunnel route dns k8s-codeomelet argocd.codeomelet.dev
-cloudflared tunnel route dns k8s-codeomelet auth.codeomelet.dev
-
-# 3. sealed-secrets cert (once apps/sealed-secrets.yaml has synced)
-export KUBECONFIG=./kubeconfig
-kubeseal --fetch-cert \
-  --controller-name=sealed-secrets \
-  --controller-namespace=kube-system \
-  > sealed-secrets-pub-cert.pem
-
-# 4. seal tunnel credentials
-kubectl create secret generic cloudflared-tunnel-credentials \
-  --namespace cloudflared \
-  --from-file=credentials.json=$HOME/.cloudflared/<TUNNEL_ID>.json \
-  --dry-run=client -o yaml \
-  | kubeseal --cert sealed-secrets-pub-cert.pem -o yaml \
-  > clusters/dev/cloudflared/cloudflared-tunnel-credentials.sealed.yaml
-
-# 5. seal authentik creds
-SECRET_KEY=$(openssl rand -base64 60 | tr -d '\n')
-PG_PASSWORD=$(openssl rand -base64 32 | tr -d '\n')
-kubectl create secret generic authentik-creds \
-  --namespace authentik \
-  --from-literal=secret_key="$SECRET_KEY" \
-  --from-literal=postgresql-password="$PG_PASSWORD" \
-  --dry-run=client -o yaml \
-  | kubeseal --cert sealed-secrets-pub-cert.pem -o yaml \
-  > clusters/dev/authentik/authentik-creds.sealed.yaml
-
-git add clusters/dev
-git commit -m "add sealed secrets for cloudflared + authentik"
-git push origin main
-```
+- [ ] Cosmetic, not blocking: Traefik's Service is `type: LoadBalancer`
+      sitting `<pending>` forever instead of `ClusterIP` as intended - the
+      `service.type`/`ports.web.port` values we set in `apps/traefik.yaml`
+      aren't the right key path for chart 41.2.0 (values ARE reaching
+      Helm, confirmed via `kubectl get application traefik -o yaml` -
+      just wrong keys). `cloudflared` still reaches it fine via ClusterIP
+      regardless of `type`, so this doesn't block anything - fix whenever:
+      `helm show values traefik/traefik --version 41.2.0 | grep -B2 -A5
+      "^service:"` to find the real key.
+- [ ] cloudflared client itself flagged as outdated (`2026.7.3` ->
+      `2026.8.2` available) - not urgent, upgrade whenever.
 
 ---
 
-## Adding a new app behind auth (once the base above is working)
+## Adding a new app behind auth
 
 Because auth is domain-level, adding a new app needs **no new Authentik
 Provider** - just:
 
 1. Add a Service for the app (or it comes with one via its own chart).
-2. Add a hostname line to `cloudflared/configmap.yaml`:
+2. Add a hostname line to `clusters/dev/cloudflared/configmap.yaml`:
    `- hostname: <app>.codeomelet.dev` -> `service: http://traefik.traefik.
-   svc.cluster.local:8000`
+   svc.cluster.local:80`
 3. `cloudflared tunnel route dns k8s-codeomelet <app>.codeomelet.dev`
-4. Add an Ingress in `ingress/` with:
+4. Add an Ingress in `clusters/dev/ingress/` with:
    `traefik.ingress.kubernetes.io/router.middlewares:
    authentik-authentik-forwardauth@kubernetescrd`
    (same middleware every time - that's the point of domain-level mode)
+5. If the app needs persistent storage, it'll pick up `local-path` as the
+   default StorageClass automatically - no extra config needed unless it
+   wants a non-default class.
 
-No tunnel recreation, no new Authentik Provider, no Terraform changes.
+No tunnel recreation, no new Authentik Provider, no Terraform changes for
+steps 1-4. Step 5 only needs a Terraform change if you're adding an
+entirely new hostPath-style dependency the way `local-path-provisioner`
+needed `extraMounts` - normal PVCs on the existing StorageClass need
+nothing extra.
 
 ---
 
@@ -253,7 +237,8 @@ step, get a working set of manifests for their own domain/cluster.
 Planned approach: **Jinja2 templates + a single `config.yaml`**, rendered
 by a small script, checked in as `Makefile` target `make render`.
 
-Rough shape (to build once the base above is proven working):
+Rough shape (to build once the base above is proven working - it now is,
+so this is next up once you're ready):
 
 ```
 config.example.yaml       <- copy to config.yaml, fill in your values
@@ -262,6 +247,7 @@ templates/
   clusters/dev/apps/cloudflared.yaml.j2
   clusters/dev/cloudflared/configmap.yaml.j2
   clusters/dev/ingress/*.yaml.j2
+  clusters/dev/storage/kustomization.yaml.j2
   ...
 render.py                 <- loads config.yaml, renders templates/**/*.j2
                               into their real paths (strips .j2 suffix)
@@ -278,6 +264,3 @@ Open question for when we get there: fold the Terraform side
 Terraform on its own `tfvars` (it already has its own templating via
 variables) and use Jinja only for the GitOps-repo YAML that doesn't have
 Terraform's engine available. Leaning toward the latter.
-
-Not building this yet - revisit once the Cloudflare Tunnel + Authentik
-rollout above is fully working end-to-end.
