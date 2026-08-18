@@ -301,6 +301,32 @@ plan, not the status.
   always-on cluster service - makes most sense once there are actual
   repos/pipelines to point it at.
 
+### Decisions made on the roadmap so far
+
+- **GlitchTip over Sentry** for error tracking - MIT-licensed, Sentry-API-
+  compatible, far lighter footprint than self-hosted Sentry's
+  Postgres/Redis/Kafka/ClickHouse stack. Decided, not built yet.
+- **A separate, long-lived Proxmox VM (Docker Compose, not Kubernetes)**
+  for stateful services that shouldn't be lost on a cluster rebuild:
+  SonarQube, Gitea, possibly a CI runner later. Rationale: the Talos
+  cluster is meant to be disposable/rebuildable from git with no precious
+  state; SonarQube's scan history, Gitea's actual repos, and CI build
+  history are exactly the kind of state that should NOT live somewhere
+  that gets nuked for testing. Plain Docker Compose also sidesteps
+  SonarQube's Elasticsearch backend wanting host-level `sysctl` settings
+  (`vm.max_map_count=262144`) that would mean fighting Talos's restricted
+  config surface again for a tool that doesn't need to be in the cluster
+  anyway.
+- **Gitea as a GitHub mirror + home for sensitive/low-importance repos**:
+  main projects stay on GitHub (primary, pushed there); Gitea pull-mirrors
+  those automatically (built-in Gitea feature - no custom sync script
+  needed) as a self-hosted backup; separately, repos with sensitive
+  content or not worth GitHub's visibility go on Gitea only, never pushed
+  to GitHub. Not yet decided whether to build this immediately or start
+  GitHub-only and add Gitea once a concrete repo needs it - leaning toward
+  the latter to avoid taking on another stateful service's maintenance
+  (backups, auth) before it's actually needed.
+
 ### Suggested sequencing
 
 Cluster-level observability first (teaches the cluster itself), app-level
