@@ -44,7 +44,7 @@ variable "vm_cores" {
   default = 4
 }
 variable "vm_memory" {
-  default = 8192
+  default = 16384
 }
 variable "vm_disk_size" {
   default = 60
