@@ -7,8 +7,12 @@ ArgoCD). ArgoCD's root app watches `clusters/dev/apps` specifically (not
 `clusters/dev` itself - see bug #6 below for why that distinction matters).
 
 **Status as of last update: cluster is up, Cloudflare Tunnel is live,
-Authentik/Postgres/Traefik/cloudflared are all Running. Only remaining step
-is the one-time Authentik login + forward-auth provider setup below.**
+Authentik/Postgres/Traefik/cloudflared are all Running, and login through
+the full chain (Cloudflare -> Traefik -> Authentik) is confirmed working.
+Next real milestone: wire up the domain-level forward-auth Provider so
+other apps (starting with ArgoCD) actually get gated, then start on the
+Jinja templating pass before adding more apps (see Roadmap below - the
+observability/security wishlist is exactly the case for doing that now).**
 
 ---
 
@@ -158,9 +162,28 @@ is the one-time Authentik login + forward-auth provider setup below.**
      `/var/lib/cilium` mount, this time for
      `/var/mnt/local-path-provisioner`, in `terraform/talos.tf`.
 
-**Status: all fixed, full stack confirmed healthy** - nodes Ready, Cilium/
-Traefik/cloudflared/sealed-secrets/local-path-provisioner all Running,
-Authentik server+worker+postgres all Running.
+7. **Authentik's initial-setup flow refused with `ak-stage-access-denied`,
+   error message "Access the authentik setup by navigating to
+   http://auth.codeomelet.dev/"** - note the `http://`, not `https://`.
+   Cause: `cloudflared` connects to Traefik over plain HTTP (Traefik's
+   "web" entrypoint), and Traefik by default *generates*
+   `X-Forwarded-Proto` based on which of its own entrypoints received the
+   request - overwriting whatever `cloudflared` actually sent (which was
+   correctly `https`, reflecting how the browser really reached
+   Cloudflare's edge) with `http`. Authentik saw `http` and refused to run
+   its setup flow as a safety check. Fix: added
+   `--entrypoints.web.forwardedheaders.trustedips` /
+   `...websecure...` as `additionalArguments` in `apps/traefik.yaml`,
+   scoped to the cluster's pod CIDR (`10.244.0.0/16`, confirmed from real
+   pod IPs seen in `authentik-server`'s own logs) so Traefik trusts and
+   passes through what `cloudflared` sends instead of overwriting it.
+   Used `additionalArguments` (raw Traefik CLI flags) rather than another
+   guessed `values.yaml` key path, since bug we'd already been burned once
+   this build by a values key silently doing nothing (see the
+   `service.type`/`ports.web.port` issue in the TODO list above).
+
+**Status: login through the full chain confirmed working.** All ArgoCD
+Applications synced; `authentik-server`/`worker`/`postgresql` all Running.
 
 ---
 
@@ -229,7 +252,80 @@ nothing extra.
 
 ---
 
-## Future: genericizing this into a template repo (not started yet)
+## Roadmap: observability, security, and app-support tooling
+
+Wishlist as of last update: Grafana, Prometheus, Sentry, SonarQube, Pixie
+(eBPF), Headlamp, Trivy or Kubescape, Loki + Vector, Jaeger/OpenTelemetry.
+Goal is free/self-hosted wherever possible, and a cluster that can be
+**rebuilt from scratch repeatedly** without redoing manual setup each time
+(config only, not zero-effort) - plus the ability to **move to a different
+domain** the user owns. Nothing in this section is built yet - this is the
+plan, not the status.
+
+### What each tool actually is, and licensing/resource notes
+
+- **Prometheus + Grafana** (`kube-prometheus-stack` chart): fully free,
+  no caveats. Standard metrics + dashboards. Build this first.
+- **Loki + Vector**: Loki (Grafana Labs, open-source) for logs, Vector
+  (open-source) as the shipper instead of the older Promtail agent. Pairs
+  naturally with Grafana once that exists.
+- **Cilium Hubble**: not on the original wishlist, but effectively free -
+  Cilium's eBPF datapath is already running, enabling Hubble is a flag
+  flip, no new agent. Gives network-flow observability immediately, covers
+  a lot of what Pixie is for at zero extra resource cost.
+- **Pixie**: open-source, but self-hosted Pixie normally talks to Pixie
+  Cloud (usage-based pricing beyond a free tier) - there's a fully
+  self-hosted mode but more setup involved. Treat as optional/later given
+  Hubble covers similar ground for free.
+- **Trivy** (Aqua Security, fully open-source): image/IaC vulnerability
+  scanning, has an in-cluster Operator for continuous scanning. No
+  caveats.
+- **Kubescape** (open-source): cluster *posture*/compliance scanning (NSA-
+  CISA hardening benchmarks) - complements Trivy, isn't really a
+  substitute for it despite often being mentioned as an alternative.
+- **Headlamp** (CNCF project, fully open-source): modern replacement for
+  the old Kubernetes Dashboard.
+- **Jaeger + OpenTelemetry**: both free. Grafana also has its own tracing
+  backend, **Tempo** - worth considering instead of Jaeger since it'd
+  unify everything into one "LGTM stack" (Loki/Grafana/Tempo/Mimir-
+  Prometheus) rather than a separate install. Only actually useful once
+  there are real instrumented apps running - a "once deploying Python
+  apps" tool, not a day-one one.
+- **Sentry**: self-hosted is open-source (Business Source License - free
+  for own use, not for reselling as a competing service), but heavy:
+  Postgres, Redis, Kafka/ClickHouse, multiple workers. **GlitchTip** is a
+  lighter alternative worth knowing about - MIT-licensed, Sentry-API-
+  compatible, far smaller footprint. Good swap-in for a homelab.
+- **SonarQube**: Community Edition is free (LGPL), some features gated to
+  paid tiers (branch analysis, etc.). Really a CI/CD-time tool, not an
+  always-on cluster service - makes most sense once there are actual
+  repos/pipelines to point it at.
+
+### Suggested sequencing
+
+Cluster-level observability first (teaches the cluster itself), app-level
+tools once there's an app worth instrumenting:
+
+1. Prometheus + Grafana (`kube-prometheus-stack`)
+2. Cilium Hubble (near-zero cost given Cilium's already there)
+3. Loki + Vector
+4. Headlamp
+5. Trivy (Operator)
+6. -- once actually deploying Python apps --
+7. Tempo or Jaeger + OpenTelemetry Collector
+8. Sentry or GlitchTip
+9. Kubescape, SonarQube - whenever, lower urgency
+
+### Rebuildability + domain portability
+
+This is the strongest signal yet that the Jinja templating plan (see below)
+should move up before adding more apps - every new tool above means
+copy-pasting the same ArgoCD-Application-wrapper + Ingress +
+ForwardAuth-middleware pattern with `codeomelet.dev` hardcoded again. Doing
+the templating pass now, before the app count grows further, means each of
+these tools gets added once as a template instead of needing to be
+retrofitted later across a dozen copy-pasted files.
+
 
 Goal: fork-and-go for someone else - edit **one** config file, run a render
 step, get a working set of manifests for their own domain/cluster.
