@@ -1,8 +1,3 @@
-# kube-prometheus-stack bundles Prometheus, Grafana, Alertmanager,
-# node-exporter, and kube-state-metrics in one chart. Grafana sits behind
-# the shared Authentik domain-level forward-auth middleware, same as ArgoCD -
-# see authentik-forwardauth-middleware.yaml. Prometheus gets a small PVC via
-# local-path-provisioner so metrics survive pod restarts.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -13,9 +8,6 @@ spec:
   source:
     repoURL: https://prometheus-community.github.io/helm-charts
     chart: kube-prometheus-stack
-    # confirmed current as of writing (Aug 2026) - re-check at
-    # https://github.com/prometheus-community/helm-charts/releases before
-    # relying on this long-term
     targetRevision: "88.5.3"
     helm:
       releaseName: kube-prometheus-stack

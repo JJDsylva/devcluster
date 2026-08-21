@@ -1,5 +1,3 @@
-# Replace TUNNEL_ID_HERE with the ID printed by `cloudflared tunnel create`.
-# Verify the traefik service name/namespace with: kubectl get svc -n traefik
 apiVersion: v1
 kind: ConfigMap
 metadata:

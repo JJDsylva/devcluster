@@ -1,7 +1,3 @@
-# Talos-specific: root filesystem is read-only except /var, so the
-# provisioner's default path (/opt/local-path-provisioner) doesn't work -
-# redirect it to /var/mnt/local-path-provisioner instead, per
-# https://docs.siderolabs.com/kubernetes-guides/csi/local-storage
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

@@ -8,8 +8,7 @@ spec:
   source:
     repoURL: https://charts.goauthentik.io
     chart: authentik
-    targetRevision: "2026.8.0" # confirmed current as of writing - re-check
-    # at https://github.com/goauthentik/helm/releases before relying on this
+    targetRevision: "2026.8.0"
     helm:
       releaseName: authentik
       values: |
@@ -39,9 +38,6 @@ spec:
             ingressClassName: traefik
             hosts:
               - auth.codeomelet.dev
-            # intentionally NO forward-auth middleware annotation here -
-            # Authentik must never require itself as a login gate, or you
-            # get a redirect loop nobody can log in out of.
         worker:
           env:
             - name: AUTHENTIK_SECRET_KEY
