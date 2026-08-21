@@ -1,0 +1,85 @@
+# kube-prometheus-stack bundles Prometheus, Grafana, Alertmanager,
+# node-exporter, and kube-state-metrics in one chart. Grafana sits behind
+# the shared Authentik domain-level forward-auth middleware, same as ArgoCD -
+# see authentik-forwardauth-middleware.yaml. Prometheus gets a small PVC via
+# local-path-provisioner so metrics survive pod restarts.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    # confirmed current as of writing (Aug 2026) - re-check at
+    # https://github.com/prometheus-community/helm-charts/releases before
+    # relying on this long-term
+    targetRevision: "88.5.3"
+    helm:
+      releaseName: kube-prometheus-stack
+      values: |
+        # ---------------- Prometheus ----------------
+        prometheus:
+          prometheusSpec:
+            retention: 15d
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: local-path
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 20Gi
+            # Pick up ServiceMonitors/PodMonitors from any namespace, not
+            # just kube-prometheus-stack's own - needed once we add
+            # Traefik/Authentik/Hubble scrape configs later.
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+
+        # ---------------- Alertmanager ----------------
+        # No ingress/routing configured yet - defaults to in-cluster only.
+        # Revisit once we decide on a notification target (Slack/email/etc).
+        alertmanager:
+          alertmanagerSpec:
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: local-path
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 2Gi
+
+        # ---------------- Grafana ----------------
+        grafana:
+          persistence:
+            enabled: true
+            storageClassName: local-path
+            accessModes: ["ReadWriteOnce"]
+            size: 5Gi
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            annotations:
+              # gate Grafana behind the same domain-level Authentik
+              # forward-auth used for ArgoCD - see
+              # authentik-forwardauth-middleware.yaml
+              traefik.ingress.kubernetes.io/router.middlewares: authentik-authentik-forwardauth@kubernetescrd
+            hosts:
+              - grafana.codeomelet.dev
+          # Authentik forward-auth already gates access at the edge, so
+          # Grafana's own login is a second factor - keep it on for now
+          # rather than trying to wire Grafana's auth.proxy mode to trust
+          # the X-authentik-* headers. Can revisit once SSO is worth the
+          # complexity.
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
