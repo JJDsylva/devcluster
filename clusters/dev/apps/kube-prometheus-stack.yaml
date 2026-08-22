@@ -1,3 +1,8 @@
+# kube-prometheus-stack bundles Prometheus, Grafana, Alertmanager,
+# node-exporter, and kube-state-metrics in one chart. Grafana sits behind
+# the shared Authentik domain-level forward-auth middleware, same as ArgoCD -
+# see authentik-forwardauth-middleware.yaml. Prometheus gets a small PVC via
+# local-path-provisioner so metrics survive pod restarts.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -46,6 +51,14 @@ spec:
 
         # ---------------- Grafana ----------------
         grafana:
+          additionalDataSources:
+            - name: Loki
+              type: loki
+              # loki chart service name - verify with:
+              # kubectl get svc -n monitoring | grep loki
+              url: http://loki.monitoring.svc.cluster.local:3100
+              access: proxy
+              isDefault: false
           persistence:
             enabled: true
             storageClassName: local-path

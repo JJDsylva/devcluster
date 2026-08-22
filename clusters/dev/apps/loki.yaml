@@ -1,0 +1,71 @@
+# Single-binary (monolithic) mode - simplest deployment, all Loki
+# components in one process. Fine for homelab log volume. Storage is a
+# local PVC via local-path-provisioner for now; the filesystem/local
+# storage config below is intentionally easy to swap for S3-compatible
+# config (GarageHQ) later without changing deployment mode.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: loki
+    targetRevision: "7.3.0"
+    helm:
+      releaseName: loki
+      values: |
+        deploymentMode: SingleBinary
+
+        loki:
+          auth_enabled: false
+          commonConfig:
+            replication_factor: 1
+          schemaConfig:
+            configs:
+              - from: "2024-01-01"
+                store: tsdb
+                object_store: filesystem
+                schema: v13
+                index:
+                  prefix: loki_index_
+                  period: 24h
+          storage:
+            type: filesystem
+          # single-tenant, filesystem-backed - no S3/GarageHQ config yet.
+          # Revisit storage.type / storage.s3 here when migrating off
+          # local PVC.
+
+        singleBinary:
+          replicas: 1
+          persistence:
+            enabled: true
+            storageClass: local-path
+            size: 20Gi
+
+        # Disable the extra components the chart deploys by default that
+        # are only needed in distributed/microservices mode.
+        backend:
+          replicas: 0
+        read:
+          replicas: 0
+        write:
+          replicas: 0
+
+        # No ingress - Grafana talks to Loki over the in-cluster Service.
+        gateway:
+          enabled: false
+
+        test:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

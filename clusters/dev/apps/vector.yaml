@@ -1,0 +1,59 @@
+# Vector as a DaemonSet - tails container logs from every node via the
+# kubernetes_logs source and ships them to Loki's push API. Using Vector
+# instead of Promtail per the roadmap notes (Vector is the more actively
+# developed, more general-purpose shipper).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vector
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://helm.vector.dev
+    chart: vector
+    targetRevision: "0.57.0"
+    helm:
+      releaseName: vector
+      values: |
+        role: Agent
+
+        customConfig:
+          data_dir: /vector-data-dir
+          sources:
+            k8s_logs:
+              type: kubernetes_logs
+          sinks:
+            loki:
+              type: loki
+              inputs: ["k8s_logs"]
+              endpoint: http://loki-gateway.monitoring.svc.cluster.local
+              # gateway.enabled is false in the loki chart (no separate
+              # gateway service in single-binary mode) - this endpoint
+              # should be the loki service itself, e.g.
+              # http://loki.monitoring.svc.cluster.local:3100
+              # verify with: kubectl get svc -n monitoring | grep loki
+              encoding:
+                codec: json
+              labels:
+                namespace: "{{ kubernetes.pod_namespace }}"
+                pod: "{{ kubernetes.pod_name }}"
+                container: "{{ kubernetes.container_name }}"
+
+        # DaemonSet resource footprint - adjust if nodes are tight on
+        # memory; Vector's default requests are conservative already.
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            memory: 512Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
