@@ -1,3 +1,7 @@
+# Vector as a DaemonSet - tails container logs from every node via the
+# kubernetes_logs source and ships them to Loki's push API. Using Vector
+# instead of Promtail per the roadmap notes (Vector is the more actively
+# developed, more general-purpose shipper).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -13,6 +17,13 @@ spec:
       releaseName: vector
       values: |
         role: Agent
+
+        # Vector only ships logs outward to Loki - no inbound API/metrics
+        # port enabled, so the chart's extra "vector" Service (distinct
+        # from vector-headless) would end up with zero ports and get
+        # rejected by the API server. Disable it.
+        service:
+          enabled: false
 
         customConfig:
           data_dir: /vector-data-dir
@@ -31,6 +42,12 @@ spec:
               # verify with: kubectl get svc -n monitoring | grep loki
               encoding:
                 codec: json
+              # container_name (etc.) is a pure template with no literal
+              # prefix, which trips Vector's cardinality-confinement
+              # safety check. Cardinality is fine here (homelab-scale, one
+              # value per running container) - opt out explicitly rather
+              # than add an artificial prefix to the label value.
+              dangerously_allow_unconfined_template_resolution: true
               labels:
                 namespace: "{{ `{{ kubernetes.pod_namespace }}` }}"
                 pod: "{{ `{{ kubernetes.pod_name }}` }}"
