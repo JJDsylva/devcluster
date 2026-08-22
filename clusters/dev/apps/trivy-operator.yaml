@@ -1,0 +1,62 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: trivy-operator
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://aquasecurity.github.io/helm-charts/
+    chart: trivy-operator
+    targetRevision: "0.35.*"
+    helm:
+      values: |
+        trivy:
+          ignoreUnfixed: false
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          # Cache DB on a PVC so every scan doesn't re-pull the vuln DB
+          resources:
+            requests:
+              cpu: 100m
+              memory: 200Mi
+            limits:
+              cpu: 500m
+              memory: 700Mi
+
+        operator:
+          # Rescan interval for existing workloads
+          scanJobsConcurrentLimit: 3
+          scanJobsRetryDelay: 30s
+          # Enable each report type
+          vulnerabilityScannerEnabled: true
+          exposedSecretScannerEnabled: true
+          configAuditScannerEnabled: true
+          rbacAssessmentScannerEnabled: true
+          infraAssessmentScannerEnabled: true
+          # Cluster-wide compliance report (CIS benchmarks etc.), cheap to leave on
+          clusterComplianceEnabled: true
+
+        # Expose Prometheus ServiceMonitor since kube-prometheus-stack is already deployed
+        serviceMonitor:
+          enabled: true
+          labels:
+            release: kube-prometheus-stack   # match your Prometheus Operator's serviceMonitorSelector
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 512Mi
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: trivy-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
