@@ -12,6 +12,9 @@ spec:
   source:
     repoURL: https://helm.vector.dev
     chart: vector
+    # confirmed current as of writing (Aug 2026) - re-check at
+    # https://github.com/vectordotdev/helm-charts/releases before relying
+    # on this long-term
     targetRevision: "0.57.0"
     helm:
       releaseName: vector
@@ -36,9 +39,9 @@ spec:
               encoding:
                 codec: json
               labels:
-                namespace: "{{ kubernetes.pod_namespace }}"
-                pod: "{{ kubernetes.pod_name }}"
-                container: "{{ kubernetes.container_name }}"
+                namespace: "{{ `{{ kubernetes.pod_namespace }}` }}"
+                pod: "{{ `{{ kubernetes.pod_name }}` }}"
+                container: "{{ `{{ kubernetes.container_name }}` }}"
 
         # DaemonSet resource footprint - adjust if nodes are tight on
         # memory; Vector's default requests are conservative already.
