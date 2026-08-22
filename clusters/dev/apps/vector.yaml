@@ -1,7 +1,3 @@
-# Vector as a DaemonSet - tails container logs from every node via the
-# kubernetes_logs source and ships them to Loki's push API. Using Vector
-# instead of Promtail per the roadmap notes (Vector is the more actively
-# developed, more general-purpose shipper).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -12,9 +8,6 @@ spec:
   source:
     repoURL: https://helm.vector.dev
     chart: vector
-    # confirmed current as of writing (Aug 2026) - re-check at
-    # https://github.com/vectordotdev/helm-charts/releases before relying
-    # on this long-term
     targetRevision: "0.57.0"
     helm:
       releaseName: vector

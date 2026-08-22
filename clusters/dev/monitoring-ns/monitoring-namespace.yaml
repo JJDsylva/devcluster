@@ -1,0 +1,12 @@
+# node-exporter (hostNetwork/hostPID) and vector (hostPath for node logs)
+# both need privileged host access, which the cluster's default baseline
+# Pod Security level blocks. This namespace needs to exist BEFORE the
+# kube-prometheus-stack/vector/loki Applications sync, so their
+# CreateNamespace=true doesn't beat this to creating a bare unlabeled one.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest
