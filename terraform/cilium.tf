@@ -22,6 +22,14 @@ resource "helm_release" "cilium" {
       value = "true"
     },
     {
+      name  = "hubble.relay.enabled"
+      value = "true"
+    },
+    {
+      name  = "hubble.ui.enabled"
+      value = "true"
+    },
+    {
       name  = "k8sServiceHost"
       value = var.controlplane_vip
     },

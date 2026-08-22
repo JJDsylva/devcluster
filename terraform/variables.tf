@@ -52,12 +52,12 @@ variable "vm_disk_size" {
 
 # --- cilium ---
 variable "cilium_version" {
-  default = "1.20.0"
+  default = "1.20.1"
 }
 
 # --- argocd ---
 variable "argocd_chart_version" {
-  default = "10.3.1"
+  default = "10.4.0"
 }
 variable "github_repo_url" {
   description = "Repo ArgoCD's root app watches - push manifests here to deploy"
