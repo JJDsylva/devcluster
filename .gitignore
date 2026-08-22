@@ -22,8 +22,7 @@ sealed-secrets-pub-cert.pem
 credentials.json
 *.pem
 *.key
-cloudflared-tunnel-credentials.sealed.yaml
-authentik-creds.sealed.yaml
+sealed.yaml
 # --- editor/OS noise ---
 .DS_Store
 *.swp

@@ -10,6 +10,8 @@ data:
     ingress:
       - hostname: argocd.codeomelet.dev
         service: http://traefik.traefik.svc.cluster.local:80
+      - hostname: grafana.codeomelet.dev
+        service: http://traefik.traefik.svc.cluster.local:80
       - hostname: auth.codeomelet.dev
         service: http://traefik.traefik.svc.cluster.local:80
       - service: http_status:404
